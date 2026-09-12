@@ -89,8 +89,7 @@ class ProcedureModal(discord.ui.Modal, title="Procédure d'Arrestation"):
         label="Motif de l'arrestation",
         placeholder="Décrivez le motif...",
         required=True,
-        max_length=500,
-        style=discord.TextInputStyle.paragraph
+        max_length=500
     )
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -101,7 +100,8 @@ class ProcedureModal(discord.ui.Modal, title="Procédure d'Arrestation"):
             prenom=self.prenom.value,
             plaque=self.plaque.value,
             motif=self.motif.value,
-            user=interaction.user
+            user=interaction.user,
+            bot=interaction.client
         )
         
         embed = discord.Embed(
@@ -113,23 +113,30 @@ class ProcedureModal(discord.ui.Modal, title="Procédure d'Arrestation"):
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 class ImageUploadView(discord.ui.View):
-    def __init__(self, nom: str, prenom: str, plaque: str, motif: str, user: discord.User):
+    def __init__(self, nom: str, prenom: str, plaque: str, motif: str, user: discord.User, bot):
         super().__init__(timeout=300)  # 5 minutes timeout
         self.nom = nom
         self.prenom = prenom
         self.plaque = plaque
         self.motif = motif
         self.user = user
+        self.bot = bot
         self.image_url = None
 
-    @discord.ui.button(label="Télécharger l'image", style=discord.ButtonStyle.primary, emoji="📸")
+    @discord.ui.button(label="Continuer sans image", style=discord.ButtonStyle.secondary, emoji="⏭️")
+    async def skip_image(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Passe sans image"""
+        self.image_url = None
+        await self.save_procedure(interaction)
+
+    @discord.ui.button(label="Coller l'URL de l'image", style=discord.ButtonStyle.primary, emoji="📸")
     async def upload_image(self, interaction: discord.Interaction, button: discord.ui.Button):
         """Ouvre un dialogue pour télécharger l'image"""
         await interaction.response.send_modal(ImageModal(self))
 
 class ImageModal(discord.ui.Modal, title="Télécharger l'image"):
     image_url = discord.ui.TextInput(
-        label="URL de l'image (ou écrivez 'skip' pour continuer)",
+        label="URL de l'image",
         placeholder="Collez l'URL de l'image...",
         required=True,
         max_length=500
@@ -141,68 +148,60 @@ class ImageModal(discord.ui.Modal, title="Télécharger l'image"):
 
     async def on_submit(self, interaction: discord.Interaction):
         """Traite l'URL de l'image"""
-        url_input = self.image_url.value
-        
-        if url_input.lower() == 'skip':
-            self.parent_view.image_url = None
-        else:
-            self.parent_view.image_url = url_input
-        
-        # Créer et enregistrer la procédure
-        await self.save_procedure(interaction)
+        self.parent_view.image_url = self.image_url.value
+        await self.parent_view.save_procedure(interaction)
 
-    async def save_procedure(self, interaction: discord.Interaction):
-        """Sauvegarde la procédure et affiche un résumé"""
-        cog = self.parent_view  # Accès au contexte parent
-        
-        # Créer l'ID unique pour la procédure
-        procedure_id = f"{interaction.user.id}_{datetime.now().timestamp()}"
-        
-        # Charger et sauvegarder la procédure
-        from .procedure import Procedure as ProcedureCog
-        proc_cog = interaction.client.get_cog("Procedure")
-        
-        procedures = proc_cog.load_procedures()
-        procedures[procedure_id] = {
-            'id': procedure_id,
-            'officier': interaction.user.name,
-            'officier_id': interaction.user.id,
-            'nom': self.parent_view.nom,
-            'prenom': self.parent_view.prenom,
-            'plaque': self.parent_view.plaque,
-            'motif': self.parent_view.motif,
-            'image_url': self.parent_view.image_url,
-            'date': datetime.now().isoformat(),
-            'status': 'en_cours'
-        }
-        proc_cog.save_procedures(procedures)
-        
-        # Créer l'embed de confirmation
-        embed = discord.Embed(
-            title="✅ Procédure enregistrée",
-            description="La procédure d'arrestation a été créée avec succès!",
-            color=discord.Color.green()
-        )
-        embed.add_field(name="👤 Suspect", value=f"{self.parent_view.prenom} {self.parent_view.nom}", inline=False)
-        embed.add_field(name="🚗 Plaque", value=self.parent_view.plaque, inline=True)
-        embed.add_field(name="📋 Motif", value=self.parent_view.motif, inline=False)
-        embed.add_field(name="👮 Officier", value=interaction.user.mention, inline=True)
-        embed.add_field(name="🆔 ID Procédure", value=f"`{procedure_id}`", inline=False)
-        
-        if self.parent_view.image_url:
-            embed.add_field(name="📸 Image", value="✅ Téléchargée", inline=True)
-            embed.set_image(url=self.parent_view.image_url)
-        else:
-            embed.add_field(name="📸 Image", value="❌ Non fournie", inline=True)
-        
-        embed.timestamp = datetime.now()
-        
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+async def save_procedure(self, interaction: discord.Interaction):
+    """Sauvegarde la procédure et affiche un résumé"""
+    
+    # Créer l'ID unique pour la procédure
+    procedure_id = f"{interaction.user.id}_{datetime.now().timestamp()}"
+    
+    # Récupérer le cog Procedure
+    proc_cog = interaction.client.get_cog("Procedure")
+    
+    procedures = proc_cog.load_procedures()
+    procedures[procedure_id] = {
+        'id': procedure_id,
+        'officier': interaction.user.name,
+        'officier_id': interaction.user.id,
+        'nom': self.nom,
+        'prenom': self.prenom,
+        'plaque': self.plaque,
+        'motif': self.motif,
+        'image_url': self.image_url,
+        'date': datetime.now().isoformat(),
+        'status': 'en_cours'
+    }
+    proc_cog.save_procedures(procedures)
+    
+    # Créer l'embed de confirmation
+    embed = discord.Embed(
+        title="✅ Procédure enregistrée",
+        description="La procédure d'arrestation a été créée avec succès!",
+        color=discord.Color.green()
+    )
+    embed.add_field(name="👤 Suspect", value=f"{self.prenom} {self.nom}", inline=False)
+    embed.add_field(name="🚗 Plaque", value=self.plaque, inline=True)
+    embed.add_field(name="📋 Motif", value=self.motif, inline=False)
+    embed.add_field(name="👮 Officier", value=interaction.user.mention, inline=True)
+    embed.add_field(name="🆔 ID Procédure", value=f"`{procedure_id}`", inline=False)
+    
+    if self.image_url:
+        embed.add_field(name="📸 Image", value="✅ Téléchargée", inline=True)
+        try:
+            embed.set_image(url=self.image_url)
+        except:
+            embed.add_field(name="⚠️ Erreur", value="Impossible de charger l'image", inline=False)
+    else:
+        embed.add_field(name="📸 Image", value="❌ Non fournie", inline=True)
+    
+    embed.timestamp = datetime.now()
+    
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @discord.ui.button(label="Confirmer", style=discord.ButtonStyle.success, emoji="✅")
-    async def confirm_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Bouton de confirmation (optionnel)"""
-        pass
+# Ajouter la méthode au ImageUploadView
+ImageUploadView.save_procedure = save_procedure
 
 async def setup(bot):
     await bot.add_cog(Procedure(bot))
