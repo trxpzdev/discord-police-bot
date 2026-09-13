@@ -21,7 +21,11 @@ class Services(commands.Cog):
                 json.dump({"services": [], "active_services": {}}, f, indent=2)
         if not os.path.exists(self.config_file):
             with open(self.config_file, 'w') as f:
-                json.dump({"panel_channel_id": None, "panel_message_id": None}, f, indent=2)
+                json.dump({
+                    "panel_channel_id": None,
+                    "panel_message_id": None,
+                    "allowed_roles": ["Police", "Commandant", "Chef de Police"]
+                }, f, indent=2)
 
     def load_services(self):
         try:
@@ -39,16 +43,21 @@ class Services(commands.Cog):
             with open(self.config_file, 'r') as f:
                 return json.load(f)
         except (json.JSONDecodeError, FileNotFoundError):
-            return {"panel_channel_id": None, "panel_message_id": None}
+            return {
+                "panel_channel_id": None,
+                "panel_message_id": None,
+                "allowed_roles": ["Police", "Commandant", "Chef de Police"]
+            }
 
     def save_config(self, data):
         with open(self.config_file, 'w') as f:
             json.dump(data, f, indent=2)
 
     def has_police_role(self, member: discord.Member) -> bool:
-        required_roles = ["Police", "Commandant", "Chef de Police"]
+        config = self.load_config()
+        allowed_roles = config.get("allowed_roles", ["Police", "Commandant", "Chef de Police"])
         member_roles = [role.name for role in member.roles]
-        for role in required_roles:
+        for role in allowed_roles:
             if role in member_roles:
                 return True
         return False
@@ -77,6 +86,40 @@ class Services(commands.Cog):
         config["panel_channel_id"] = channel.id
         self.save_config(config)
         embed = discord.Embed(title="✅ Panel configuré", description=f"Le panel de services sera envoyé dans {channel.mention}", color=discord.Color.green())
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="services_config_roles", description="Configurer les rôles autorisés pour les services")
+    @app_commands.describe(roles="Rôles autorisés (séparés par des virgules). Ex: Police,Commandant,Chef")
+    async def services_config_roles(self, interaction: discord.Interaction, roles: str):
+        if not interaction.user.guild_permissions.administrator:
+            embed = discord.Embed(title="❌ Permission refusée", description="Seul un administrateur peut configurer les rôles.", color=discord.Color.red())
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        role_list = [r.strip() for r in roles.split(",")]
+        config = self.load_config()
+        config["allowed_roles"] = role_list
+        self.save_config(config)
+
+        embed = discord.Embed(title="✅ Rôles configurés", description=f"Rôles autorisés:\n" + "\n".join([f"• {r}" for r in role_list]), color=discord.Color.green())
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="services_config_view", description="Voir la configuration actuelle des services")
+    async def services_config_view(self, interaction: discord.Interaction):
+        if not interaction.user.guild_permissions.administrator:
+            embed = discord.Embed(title="❌ Permission refusée", color=discord.Color.red())
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+            return
+        
+        config = self.load_config()
+        allowed_roles = config.get("allowed_roles", [])
+        channel_id = config.get("panel_channel_id")
+        channel_text = f"<#{channel_id}>" if channel_id else "Non configuré"
+        
+        embed = discord.Embed(title="⚙️ Configuration Services", color=discord.Color.blue())
+        embed.add_field(name="🎯 Rôles autorisés", value="\n".join([f"• {r}" for r in allowed_roles]) if allowed_roles else "Aucun", inline=False)
+        embed.add_field(name="📍 Salon du panel", value=channel_text, inline=False)
+        embed.timestamp = datetime.now()
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="services_panel", description="Envoyer le panel de prise de service")
@@ -115,7 +158,7 @@ class Services(commands.Cog):
         embed = discord.Embed(title="👮 Officiers en Service", description=f"Total: **{len(active_services)}** officier(s)", color=discord.Color.blue())
         for officer_id, service_info in active_services.items():
             status = "🟢 En Service" if service_info.get("status") == "en_service" else "⏸️ En Pause"
-            field_value = f"**Matricule:** {service_info.get('matricule', 'N/A')}\n**Grade:** {service_info.get('grade', 'N/A')}\n**Plaque:** {service_info.get('plaque', 'N/A')}\n**Depuis:** {service_info.get('start_time', 'N/A')[:5]}\n**Statut:** {status}"
+            field_value = f"**Matricule:** {service_info.get('matricule', 'N/A')}\n**Grade:** {service_info.get('grade', 'N/A')}\n**Plaque:** {service_info.get('plaque', 'N/A')}\n**Depuis:** {service_info.get('start_time', 'N/A')[11:16]}\n**Statut:** {status}"
             embed.add_field(name=f"👤 {service_info.get('nom_prenom', 'Unknown')}", value=field_value, inline=False)
         embed.timestamp = datetime.now()
         await interaction.response.send_message(embed=embed)
@@ -170,7 +213,7 @@ class ServicesPanelView(discord.ui.View):
     @discord.ui.button(label="Prendre Service", style=discord.ButtonStyle.success, emoji="🟢")
     async def take_service(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not self.cog.has_police_role(interaction.user):
-            embed = discord.Embed(title="❌ Permission refusée", description="Seuls les membres de la Police peuvent prendre service.", color=discord.Color.red())
+            embed = discord.Embed(title="❌ Permission refusée", description="Seuls les membres autorisés peuvent prendre service.", color=discord.Color.red())
             await interaction.response.send_message(embed=embed, ephemeral=True)
             return
         data = self.cog.load_services()
